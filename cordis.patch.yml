@@ -1,0 +1,5 @@
+# dsh-add-file bundle patch:
+# Injects fallback CSS for dsh-files dock when composer variables are missing.
+- insert:
+    - id: add-file-fix
+      name: 'dsh-add-file'

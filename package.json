@@ -1,0 +1,21 @@
+{
+  "name": "dsh-add-file",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fix dsh-files dock layout: CSS fallback for missing composer variables, left-aligned input text",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "dependencies": {},
+  "peerDependencies": {}
+}
