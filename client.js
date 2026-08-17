@@ -25,12 +25,6 @@
 
   // ── CSS ──
   const STYLE_CSS = `
-/* Hide the original "+" button (DSH's built-in command menu trigger) */
-[data-slot="conversation.input.left"] ~ .dsh-am-tools .dsh-am-add,
-div[data-slot="conversation.input.left"] + .dsh-am-tools .dsh-am-add {
-  display: none !important;
-}
-
 /* Override any rule that sets text-align on the input area */
 .dsh-am-menu-anchor,
 .dsh-am-menu-anchor ~ textarea,
@@ -335,6 +329,27 @@ div[data-slot="conversation.input.left"] + .dsh-am-tools .dsh-am-add {
       }
       // Future: else if (item.id === "image") { item.action = openImagePicker; }
     });
+
+    // Hide the original "+" button (DSH's built-in command menu trigger)
+    // Uses MutationObserver since the button may not exist yet at apply time
+    function hideOriginalPlus() {
+      const tools = document.querySelector('[data-slot="conversation.input"] .dsh-am-tools, [data-slot="conversation.input"] [class*="tools"]');
+      if (!tools) return;
+      const btns = tools.querySelectorAll("button");
+      for (const btn of btns) {
+        // The original + has aria-haspopup="listbox" and contains IconPlusOutline16
+        if (btn.getAttribute("aria-haspopup") === "listbox") {
+          btn.style.display = "none";
+          return;
+        }
+      }
+    }
+    // Try immediately, then observe for late additions
+    hideOriginalPlus();
+    const mo = new MutationObserver(hideOriginalPlus);
+    mo.observe(document.body, { childList: true, subtree: true });
+    // Stop observing after 10s (enough time for DSH to render)
+    setTimeout(() => mo.disconnect(), 10000);
 
     // Replace the "+" button via conversation.input.left slot
     ctx.slots.inject(
