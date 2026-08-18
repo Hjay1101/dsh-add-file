@@ -1,3 +1,10 @@
+window.__ModuleLoader__.load({
+  id: "dsh-add-file",
+  factory: (require) => {
+    var module = { exports: {} };
+    var exports = module.exports;
+    var React = require("react");
+
 // dsh-add-file — custom "+" menu with file upload
 // Replaces the default command menu button with a unified launcher
 // that supports file upload and is extensible for future items.
@@ -11,6 +18,13 @@
   // ── Menu item registry (extensible) ──
   // Each item: { id, label, icon (SVG string), section, action, description? }
   const MENU_ITEMS = [
+    {
+      id: "command",
+      label: "命令",
+      icon: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4.5 6.5v-1a2 2 0 112 2h-5m3 2v1a2 2 0 11-2-2h5m3-2v-1a2 2 0 10-2 2h5m-3 2v1a2 2 0 102 2h-5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      section: "命令",
+      description: "打开 DSH 命令面板",
+    },
     {
       id: "file",
       label: "文件",
@@ -30,6 +44,25 @@
 .dsh-am-menu-anchor ~ textarea,
 .dsh-am-menu-anchor ~ [contenteditable] {
   text-align: left !important;
+}
+
+/* Hide DSH's native command-menu "+" button (survives React remounts;
+   it is the only button[aria-haspopup="listbox"] inside the composer seat) */
+[data-composer-seat] button[aria-haspopup="listbox"] {
+  display: none !important;
+}
+
+/* Pull the left-tools slot outlet (our + and dsh-files paperclip) to the
+   far left of the tools row — where the native + used to sit */
+[data-composer-seat] [data-slot="conversation.input.left"] {
+  order: -1;
+}
+
+/* Hide dsh-files' redundant paperclip button — our + menu's 文件 item
+   replaces it. dsh-files stays installed: its server half provides the
+   /api/upload endpoint and the read_document tool our upload uses. */
+[data-composer-seat] [data-slot="conversation.input.left"] .dsh-files-btn {
+  display: none !important;
 }
 
 /* ── Menu anchor (wraps the + button) ── */
@@ -58,11 +91,12 @@
   background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.08));
 }
 
-/* ── Dropdown panel ── */
+/* ── Dropdown panel ──
+   position:fixed + body-level (portal): React re-renders of the composer
+   would otherwise wipe a dropdown living inside the React-managed anchor.
+   left/bottom are computed from the anchor's rect at open time. */
 .dsh-am-dropdown {
   position: fixed;
-  bottom: calc(100% + 8px);
-  left: 0;
   min-width: 240px;
   max-width: 360px;
   background: var(--dsw-alias-surface-1, #fff);
@@ -133,25 +167,32 @@
 
   function injectStyle() {
     if (typeof document === "undefined") return;
-    if (document.getElementById("dsh-am-style")) return;
+    // data-plugin lets the HMR chain remove this tag on rebuild
+    if (document.querySelector('style[data-plugin="dsh-add-file"]')) return;
     const tag = document.createElement("style");
     tag.id = "dsh-am-style";
+    tag.dataset.plugin = "dsh-add-file";
     tag.textContent = STYLE_CSS;
     document.head.appendChild(tag);
   }
 
   // ── Upload logic ──
+  // Active session id is provided by the conversation slot owner (like
+  // dsh-files' attach inject); fall back to the URL, then "anonymous".
+  let activeSessionId = null;
+
   function getSessionId() {
     const m = location.pathname.match(/\/session\/([^/]+)/);
     return m ? m[1] : "anonymous";
   }
 
-  async function uploadFile(file) {
+  async function uploadFile(file, sessionId) {
+    const sid = sessionId || activeSessionId || getSessionId();
     const res = await fetch("/api/upload", {
       method: "POST",
       headers: {
         "x-file-name": encodeURIComponent(file.name),
-        "x-session-id": getSessionId(),
+        "x-session-id": sid,
       },
       body: file,
     });
@@ -162,32 +203,49 @@
     return res.json();
   }
 
+  // ── Compose the input-box expression for an uploaded file ──
+  // A quoted path reads as one token to the model (read_document target).
+  function composeReference(path) {
+    return `"${path}"`;
+  }
+
+  // ── Inject text into the composer ──
+  // Concatenates at the caret position (smart spacing so words don't glue),
+  // via the native value setter + input event so React's controlled
+  // textarea picks it up. Cursor lands right after the inserted piece.
   function injectText(text) {
-    // Try execCommand first (works with React controlled textarea)
     const ta = document.querySelector(
       'textarea[data-phase], textarea[placeholder], textarea'
     );
-    if (ta) {
-      ta.focus();
-      if (document.execCommand("insertText", false, text)) return;
-      // Fallback: set value + dispatch events
-      const nativeSet = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        "value"
-      )?.set;
-      if (nativeSet) {
-        nativeSet.call(ta, ta.value + text);
-      } else {
-        ta.value += text;
-      }
-      ta.dispatchEvent(new Event("input", { bubbles: true }));
-      ta.dispatchEvent(new Event("change", { bubbles: true }));
+    if (!ta) return;
+    ta.focus();
+    const start = ta.selectionStart ?? ta.value.length;
+    const end = ta.selectionEnd ?? ta.value.length;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(end);
+    let piece = text;
+    if (before.length > 0 && !/\s$/.test(before)) piece = " " + piece;
+    if (after.length > 0 && !/^\s/.test(after)) piece = piece + " ";
+    const next = before + piece + after;
+    const nativeSet = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value"
+    )?.set;
+    if (nativeSet) nativeSet.call(ta, next);
+    else ta.value = next;
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    ta.dispatchEvent(new Event("change", { bubbles: true }));
+    try {
+      ta.setSelectionRange(start + piece.length, start + piece.length);
+    } catch {
+      /* caret restore is best-effort */
     }
   }
 
   // ── Menu state ──
   let menuOpen = false;
   let menuEl = null;
+  let menuAnchor = null;
 
   function closeMenu() {
     if (menuEl) {
@@ -195,6 +253,7 @@
       menuEl = null;
     }
     menuOpen = false;
+    menuAnchor = null;
   }
 
   function toggleMenu(anchor) {
@@ -202,6 +261,7 @@
       closeMenu();
       return;
     }
+    menuAnchor = anchor;
 
     // Group items by section
     const sections = {};
@@ -242,7 +302,15 @@
       }
     }
 
-    anchor.appendChild(dropdown);
+    // Portal to <body> with fixed coords from the anchor rect — React
+    // reconciliation of the composer never touches body-level nodes, so
+    // the menu survives any re-render while open.
+    const r = anchor.getBoundingClientRect();
+    const vw = window.innerWidth || document.documentElement.clientWidth;
+    const estWidth = 260; // min-width
+    dropdown.style.left = Math.min(Math.max(0, r.left), Math.max(0, vw - estWidth)) + "px";
+    dropdown.style.bottom = Math.round(window.innerHeight - r.top + 8) + "px";
+    document.body.appendChild(dropdown);
     menuEl = dropdown;
     menuOpen = true;
 
@@ -253,12 +321,41 @@
   }
 
   function onOutsideClick(e) {
-    if (menuEl && !menuEl.contains(e.target)) {
+    // Ignore clicks inside the anchor (the trigger button): the trigger's
+    // own onClick toggles the menu; only close for genuinely outside clicks.
+    if (menuEl && menuAnchor && !menuEl.contains(e.target) && !menuAnchor.contains(e.target)) {
       closeMenu();
     }
   }
 
   // ── Menu item actions ──
+  // Open DSH's native "/" command palette — same call the built-in + used
+  // (inputTriggers.sessionOf(session ctx).toggleSource("command", hit)).
+  function openCommandMenu() {
+    const sessionId = activeSessionId;
+    if (!sessionId || sessionId === "anonymous") return;
+    try {
+      const actx = _ctx.sessions.scope(sessionId);
+      const controller = _ctx.inputTriggers.sessionOf(actx);
+      const conversation = actx.get("conversation");
+      const state = conversation?.input?.for(actx)?.state?.getSnapshot();
+      const draft = state?.draft ?? "";
+      const span = {
+        start: draft.length,
+        end: draft.length,
+        draftRev: state?.draftRev,
+      };
+      controller.toggleSource("command", {
+        trigger: "/",
+        query: "",
+        position: draft.trim() === "" ? "leading" : "inline",
+        span,
+      });
+    } catch (err) {
+      console.error("[dsh-add-file] open command menu failed:", err);
+    }
+  }
+
   function openFilePicker() {
     const input = document.createElement("input");
     input.type = "file";
@@ -270,8 +367,8 @@
       input.remove();
       for (const file of files) {
         try {
-          const result = await uploadFile(file);
-          if (result?.path) injectText(result.path);
+          const result = await uploadFile(file, activeSessionId);
+          if (result?.path) injectText(composeReference(result.path));
         } catch (err) {
           console.error("[dsh-add-file] upload failed:", err);
         }
@@ -281,8 +378,10 @@
   }
 
   // ── React component: trigger button ──
-  function MenuTrigger() {
+  function MenuTrigger(props) {
     const anchorRef = React.useRef(null);
+    // The conversation slot owner injects the active session id (see apply)
+    if (props && props.sessionId) activeSessionId = props.sessionId;
 
     const handleClick = (e) => {
       e.preventDefault();
@@ -322,34 +421,19 @@
     _ctx = ctx;
     injectStyle();
 
-    // Register file actions (extensible: add more action handlers here)
+    // Register item actions (extensible: add more action handlers here)
     MENU_ITEMS.forEach((item) => {
       if (item.id === "file") {
         item.action = openFilePicker;
+      } else if (item.id === "command") {
+        item.action = openCommandMenu;
       }
       // Future: else if (item.id === "image") { item.action = openImagePicker; }
     });
 
-    // Hide the original "+" button (DSH's built-in command menu trigger)
-    // Uses MutationObserver since the button may not exist yet at apply time
-    function hideOriginalPlus() {
-      const tools = document.querySelector('[data-slot="conversation.input"] .dsh-am-tools, [data-slot="conversation.input"] [class*="tools"]');
-      if (!tools) return;
-      const btns = tools.querySelectorAll("button");
-      for (const btn of btns) {
-        // The original + has aria-haspopup="listbox" and contains IconPlusOutline16
-        if (btn.getAttribute("aria-haspopup") === "listbox") {
-          btn.style.display = "none";
-          return;
-        }
-      }
-    }
-    // Try immediately, then observe for late additions
-    hideOriginalPlus();
-    const mo = new MutationObserver(hideOriginalPlus);
-    mo.observe(document.body, { childList: true, subtree: true });
-    // Stop observing after 10s (enough time for DSH to render)
-    setTimeout(() => mo.disconnect(), 10000);
+    // The native "+" button is hidden by the injected CSS rule
+    // ([data-composer-seat] button[aria-haspopup="listbox"]),
+    // and the left-tools outlet is pulled to the far left via flex order.
 
     // Replace the "+" button via conversation.input.left slot
     ctx.slots.inject(
@@ -360,6 +444,7 @@
             name: "conversation.input.left",
             id: "dsh-add-file-menu",
             order: -1, // render before other left items
+            inject: (sessionId) => ({ sessionId }),
           },
           MenuTrigger
         )
@@ -368,6 +453,13 @@
 
   // ── Exports ──
   if (typeof module !== "undefined" && module !== null) {
-    module.exports = { apply, MENU_ITEMS };
+    module.exports = {
+      apply,
+      MENU_ITEMS,
+      inject: ["slots", "sessions", "inputTriggers"],
+    };
   }
 })();
+    return module.exports;
+  }
+});
