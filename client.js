@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
       label: "文件",
       icon: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 1.5A1.5 1.5 0 015.5 0h2.586a1 1 0 01.707.293l2.414 2.414a1 1 0 01.293.707V14.5A1.5 1.5 0 0110 16H5.5A1.5 1.5 0 014 14.5v-13z" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M8 8l2.5-2.5M8 8H5.5M8 8V11" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
       section: "添加",
-      description: "上传并引用本地文件",
+      description: "上传文件为附件",
     },
     // ── Future items go here ──
     // { id: "image", label: "图片", icon: '...', section: "添加" },
@@ -46,9 +46,13 @@ window.__ModuleLoader__.load({
   text-align: left !important;
 }
 
-/* Hide DSH's native command-menu "+" button (survives React remounts;
-   it is the only button[aria-haspopup="listbox"] inside the composer seat) */
-[data-composer-seat] button[aria-haspopup="listbox"] {
+/* Hide DSH's native command-menu "+" (指令) button and the native
+   attachment (添加附件) button — both are replaced by our + menu; the
+   dsh-files folder-picker button is redundant too. Survivors of React
+   remounts; these are the only matching buttons inside the composer seat. */
+[data-composer-seat] button[aria-haspopup="listbox"],
+[data-composer-seat] button[aria-label="添加附件"],
+[data-composer-seat] [data-slot="conversation.input.left"] .dsh-files-btn {
   display: none !important;
 }
 
@@ -56,13 +60,6 @@ window.__ModuleLoader__.load({
    far left of the tools row — where the native + used to sit */
 [data-composer-seat] [data-slot="conversation.input.left"] {
   order: -1;
-}
-
-/* Hide dsh-files' redundant paperclip button — our + menu's 文件 item
-   replaces it. dsh-files stays installed: its server half provides the
-   /api/upload endpoint and the read_document tool our upload uses. */
-[data-composer-seat] [data-slot="conversation.input.left"] .dsh-files-btn {
-  display: none !important;
 }
 
 /* ── Menu anchor (wraps the + button) ── */
@@ -176,70 +173,31 @@ window.__ModuleLoader__.load({
     document.head.appendChild(tag);
   }
 
-  // ── Upload logic ──
-  // Active session id is provided by the conversation slot owner (like
-  // dsh-files' attach inject); fall back to the URL, then "anonymous".
+  // ── Attachment logic (dsh >= 0.1.3 native pipeline) ──
+  // Active session id + input actions come from the conversation slot
+  // injection (same pattern dsh-files 0.5.1 uses).
   let activeSessionId = null;
+  let activeInputActions = null;
 
-  function getSessionId() {
-    const m = location.pathname.match(/\/session\/([^/]+)/);
-    return m ? m[1] : "anonymous";
-  }
-
-  async function uploadFile(file, sessionId) {
-    const sid = sessionId || activeSessionId || getSessionId();
-    const res = await fetch("/api/upload", {
-      method: "POST",
-      headers: {
-        "x-file-name": encodeURIComponent(file.name),
-        "x-session-id": sid,
-      },
-      body: file,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `上传失败 (${res.status})`);
+  // Attach files through the native attachment pipeline:
+  // conversation.createDrafts() starts the real upload (session-isolated
+  // storage, retries, upload status UI) and inputActions.addAttachments()
+  // stages the drafts into the composer. Replaces the removed /api/upload.
+  function attachFiles(files) {
+    const sessionId = activeSessionId;
+    if (!sessionId || sessionId === "anonymous") throw new Error("没有活动会话");
+    const actx = _ctx.sessions.scope(sessionId);
+    const conversation = actx.get("conversation");
+    if (conversation === void 0 || typeof conversation.createDrafts !== "function") {
+      throw new Error("原生附件管线不可用（需要 dsh >= 0.1.3）");
     }
-    return res.json();
-  }
-
-  // ── Compose the input-box expression for an uploaded file ──
-  // A quoted path reads as one token to the model (read_document target).
-  function composeReference(path) {
-    return `"${path}"`;
-  }
-
-  // ── Inject text into the composer ──
-  // Concatenates at the caret position (smart spacing so words don't glue),
-  // via the native value setter + input event so React's controlled
-  // textarea picks it up. Cursor lands right after the inserted piece.
-  function injectText(text) {
-    const ta = document.querySelector(
-      'textarea[data-phase], textarea[placeholder], textarea'
-    );
-    if (!ta) return;
-    ta.focus();
-    const start = ta.selectionStart ?? ta.value.length;
-    const end = ta.selectionEnd ?? ta.value.length;
-    const before = ta.value.slice(0, start);
-    const after = ta.value.slice(end);
-    let piece = text;
-    if (before.length > 0 && !/\s$/.test(before)) piece = " " + piece;
-    if (after.length > 0 && !/^\s/.test(after)) piece = piece + " ";
-    const next = before + piece + after;
-    const nativeSet = Object.getOwnPropertyDescriptor(
-      HTMLTextAreaElement.prototype,
-      "value"
-    )?.set;
-    if (nativeSet) nativeSet.call(ta, next);
-    else ta.value = next;
-    ta.dispatchEvent(new Event("input", { bubbles: true }));
-    ta.dispatchEvent(new Event("change", { bubbles: true }));
-    try {
-      ta.setSelectionRange(start + piece.length, start + piece.length);
-    } catch {
-      /* caret restore is best-effort */
+    const drafts = conversation.createDrafts(sessionId, files);
+    const ids = drafts.map((draft) => draft.id);
+    if (ids.length > 0 && activeInputActions !== null) {
+      const added = activeInputActions.addAttachments(ids);
+      if (!added) throw new Error("输入区繁忙，请稍后重试");
     }
+    return drafts;
   }
 
   // ── Menu state ──
@@ -331,6 +289,7 @@ window.__ModuleLoader__.load({
   // ── Menu item actions ──
   // Open DSH's native "/" command palette — same call the built-in + used
   // (inputTriggers.sessionOf(session ctx).toggleSource("command", hit)).
+  // hit shape follows dsh >= 0.1.3 (adds `quoted`).
   function openCommandMenu() {
     const sessionId = activeSessionId;
     if (!sessionId || sessionId === "anonymous") return;
@@ -348,6 +307,7 @@ window.__ModuleLoader__.load({
       controller.toggleSource("command", {
         trigger: "/",
         query: "",
+        quoted: false,
         position: draft.trim() === "" ? "leading" : "inline",
         span,
       });
@@ -365,13 +325,12 @@ window.__ModuleLoader__.load({
     input.onchange = async () => {
       const files = Array.from(input.files || []);
       input.remove();
-      for (const file of files) {
-        try {
-          const result = await uploadFile(file, activeSessionId);
-          if (result?.path) injectText(composeReference(result.path));
-        } catch (err) {
-          console.error("[dsh-add-file] upload failed:", err);
-        }
+      if (files.length === 0) return;
+      try {
+        const drafts = attachFiles(files);
+        console.info(`[dsh-add-file] attached ${drafts.length} file(s)`);
+      } catch (err) {
+        console.error("[dsh-add-file] attach failed:", err);
       }
     };
     input.click();
@@ -380,8 +339,10 @@ window.__ModuleLoader__.load({
   // ── React component: trigger button ──
   function MenuTrigger(props) {
     const anchorRef = React.useRef(null);
-    // The conversation slot owner injects the active session id (see apply)
+    // The slot injection provides the active session id; the session
+    // standard-kit provides inputActions (dsh-files 0.5.1 same pattern).
     if (props && props.sessionId) activeSessionId = props.sessionId;
+    if (props && props.inputActions) activeInputActions = props.inputActions;
 
     const handleClick = (e) => {
       e.preventDefault();
