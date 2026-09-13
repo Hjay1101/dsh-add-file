@@ -69,41 +69,50 @@ window.__ModuleLoader__.load({
   flex-shrink: 0;
 }
 
-/* ── Trigger button ── */
+/* ── Trigger button ──
+   Mirrors DSH's native composer "+" (uV2eYG_add) so it sits in the theme:
+   filled circle on --dsw-specific-selector, 28px, hover-solid background. */
 .dsh-am-trigger {
+  corner-shape: round;
   border: none;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary, rgba(127,127,127,.65));
+  background: var(--dsw-specific-selector, transparent);
+  color: var(--dsw-alias-label-primary, currentColor);
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  padding: 0;
   cursor: pointer;
-  border-radius: 6px;
-  padding: 4px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
+  flex: none;
   line-height: 0;
-  transition: color 0.15s, background 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 .dsh-am-trigger:hover {
-  color: var(--dsw-alias-label-primary, rgba(127,127,127,.88));
-  background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.08));
+  background: var(--dsw-alias-interactive-bg-hover-solid, var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)));
 }
 
 /* ── Dropdown panel ──
    position:fixed + body-level (portal): React re-renders of the composer
    would otherwise wipe a dropdown living inside the React-managed anchor.
-   left/bottom are computed from the anchor's rect at open time. */
+   left/bottom are computed from the anchor's rect at open time.
+   Surface/shadow/radius follow DSH's own menu recipe (slash menu). */
 .dsh-am-dropdown {
   position: fixed;
   min-width: 240px;
-  max-width: 360px;
-  background: var(--dsw-alias-surface-1, #fff);
-  border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08));
-  border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.06);
-  padding: 6px;
+  max-width: min(360px, calc(100vw - 32px));
+  max-height: min(360px, calc(100vh - 96px));
+  overflow-y: auto;
+  background: var(--dsw-specific-menu, var(--dsw-alias-bg-layer-1, #fff));
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  border: 0;
+  border-radius: 20px;
+  box-shadow: var(--dsw-elevation-prominent, 0 8px 32px rgba(0,0,0,.24));
+  padding: 4px;
   z-index: 9999;
-  font-family: var(--ds-font-family-body, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  font-family: var(--dsw-font-family, inherit);
   font-size: 14px;
+  line-height: 22px;
   color: var(--dsw-alias-label-primary, #1a1a1a);
   animation: dsh-am-slide-up 0.15s ease-out;
 }
@@ -112,23 +121,24 @@ window.__ModuleLoader__.load({
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Section header */
+/* Section header — DSH slash-menu sectionTitle */
 .dsh-am-section {
-  padding: 8px 10px 4px;
+  min-height: 26px;
+  padding: 6px 10px 2px;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--dsw-alias-label-tertiary, rgba(127,127,127,.55));
-  letter-spacing: 0.02em;
   user-select: none;
 }
 
-/* Menu item */
+/* Menu item — DSH slash-menu item */
 .dsh-am-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  min-height: 40px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer;
   transition: background 0.12s;
   border: none;
@@ -136,7 +146,8 @@ window.__ModuleLoader__.load({
   width: 100%;
   text-align: left;
   font-size: 14px;
-  color: inherit;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary, inherit);
   font-family: inherit;
 }
 .dsh-am-item:hover {
